@@ -5,9 +5,9 @@ import os
 
 # KORREKTER SHEETNAME UND SPALTENNAME
 SHEET_NAME = "3 Matching Tabellen"
-KEYFILE_PATH = "google-sheets-credentials.json"
+KEYFILE_PATH = os.path.join(os.path.dirname(__file__), "google-sheets-credentials.json")
 SPEISEN_SPALTE = "Speisename"  # Korrekt ohne "n" in der Mitte
-SPEISEN_AROMA_SPALTE = "Aromaprofl"  # Korrekt ohne "i" am Ende
+SPEISEN_AROMA_SPALTE = "Aromaprofil"  # Korrekt ohne "i" am Ende
 
 def verbinde_mit_google_sheets():
     """Verbindung mit Google Sheets herstellen"""
@@ -120,7 +120,7 @@ def berechne_matching_punkte(speise, wein):
         gründe.append("Süß-trocken Kontrast")
     
     # Regel 4: Fett und Tannin
-    if speise['Fettgehalt'] == 'hoch' and wein['Tanninprofil'] == 'hoch':
+    if speise['Fettgehalt'] == 'hoch' and wein['Tannin'] == 'hoch':
         punkte += 2
         gründe.append("Tannine schneiden durch das Fett")
     
@@ -202,6 +202,21 @@ def zeige_ergebnisse(matches, anzahl=3):
     
     return matches[:anzahl]
 
+def finde_naechste_freie_zeile(all_data, start_index):
+    """Ermittelt die nächste freie Zeile basierend auf der ersten Spalte."""
+    next_row = max(start_index + 1, 0)
+    total_rows = len(all_data)
+
+    while next_row < total_rows:
+        row = all_data[next_row] if next_row < total_rows else []
+        first_cell = row[0] if row else ""
+        if first_cell:
+            next_row += 1
+            continue
+        break
+
+    return next_row
+
 def speichere_ergebnisse_in_sheet(sheet, matches, speise_name):
     """Speichert die Matching-Ergebnisse zurück in das Google Sheet mit verbesserter Fehlerbehandlung"""
     try:
@@ -230,14 +245,12 @@ def speichere_ergebnisse_in_sheet(sheet, matches, speise_name):
             matching_start = len(all_data) + 2
         
         # Finde die nächste freie Zeile im Matching-Bereich
-        next_row = matching_start + 1
-        while next_row < len(all_data) and all_data[next_row][0]:
-            next_row += 1
+        next_row_index = finde_naechste_freie_zeile(all_data, matching_start)
         
-        print(f"Nächste freie Zeile: {next_row+1}")  # +1 weil Google Sheets 1-basiert ist
+        print(f"Nächste freie Zeile: {next_row_index + 1}")  # +1 weil Google Sheets 1-basiert ist
         
         # Konvertiere zu Google Sheets Zeilennummer (1-basiert)
-        next_row += 1  # 0-basiert zu 1-basiert
+        next_row = next_row_index + 1  # 0-basiert zu 1-basiert
         
         # Speichere Datum und Uhrzeit des Matchings
         from datetime import datetime
@@ -285,6 +298,7 @@ def hauptprogramm():
     if not os.path.exists(KEYFILE_PATH):
         print(f"Fehler: Die Datei {KEYFILE_PATH} wurde nicht gefunden.")
         return
+matching_rules = []
 try:
     # Verbindung einrichten
     print("Verbinde mit Google Sheets...")
@@ -301,6 +315,32 @@ try:
     speisen_sheet = sheet.worksheet("Tabellenblatt5")
     speisen_data = speisen_sheet.get_all_records()
 
+    print("Hole Matching-Regeln aus Tabellenblatt6...")
+    matching_sheet = sheet.worksheet("Tabellenblatt6")
+    matching_rules = matching_sheet.get_all_records()
+
+    print(f"\nGefundene Matching-Regeln ({len(matching_rules)} Einträge):")
+    for index, rule in enumerate(matching_rules, 1):
+        rule_name = (
+            rule.get("Regelname")
+            or rule.get("Regel")
+            or rule.get("Name")
+            or rule.get("Bezeichnung")
+            or f"Regel #{index}"
+        )
+
+        detail_values = [
+            str(value).strip()
+            for key, value in rule.items()
+            if key not in {"Regelname", "Regel", "Name", "Bezeichnung"} and str(value).strip()
+        ]
+
+        if detail_values:
+            detail_text = " / ".join(detail_values)
+            print(f"Regel geladen: {rule_name} → {detail_text}")
+        else:
+            print(f"Regel geladen: {rule_name}")
+
 except Exception as e:
     print(f"❌ Fehler beim Abrufen der Daten: {e}")
 
@@ -315,59 +355,59 @@ for i, speise in enumerate(speisen_df[SPEISEN_SPALTE].tolist(), 1):
         
 # Benutzerauswahl
 # Benutzerauswahl
-while True:
-    auswahl = input("\nWähle eine Speise (Nummer oder Name), oder 'alle' für alle Speisen, oder 'exit' zum Beenden: ")
+try:
+    while True:
+        auswahl = input("\nWähle eine Speise (Nummer oder Name), oder 'alle' für alle Speisen, oder 'exit' zum Beenden: ")
 
-    if auswahl.lower() == 'exit':
-        break
+        if auswahl.lower() == 'exit':
+            break
+
+        if auswahl.lower() == 'alle':
+            # Für alle Speisen Matches finden
+            for speise in speisen_df[SPEISEN_SPALTE].tolist():
+                print(f"\nWeinempfehlungen für {speise}:")
+                print("-" * 50)
+                matches = finde_passenden_wein(speisen_df, weine_df, speise)
+                top_matches = zeige_ergebnisse(matches)
                 
-                if auswahl.lower() == 'alle':
-        # Für alle Speisen Matches finden
-        for speise in speisen_df[SPEISEN_SPALTE].tolist():
-            print(f"\nWeinempfehlungen für {speise}:")
-            print("-" * 50)
-            matches = finde_passenden_wein(speisen_df, weine_df, speise)
-            top_matches = zeige_ergebnisse(matches)
-                    
-                    # Frage, ob Ergebnisse gespeichert werden sollen
-                    save = input("Ergebnisse im Google Sheet speichern? (j/n): ")
-                    if save.lower() == 'j':
-                        speichere_ergebnisse_in_sheet(sheet, top_matches, speise)
-            else:
-                # Einzelne Speise auswählen
-                try:
-                    if auswahl.isdigit():
-                        # Wenn eine Nummer eingegeben wurde
-                        speisen_liste = speisen_df[SPEISEN_SPALTE].tolist()
-                        index = int(auswahl) - 1
-                        if 0 <= index < len(speisen_liste):
-                            speise_name = speisen_liste[index]
-                        else:
-                            print("Ungültige Nummer. Bitte wähle eine Nummer aus der Liste.")
-                            continue
+                # Frage, ob Ergebnisse gespeichert werden sollen
+                save = input("Ergebnisse im Google Sheet speichern? (j/n): ")
+                if save.lower() == 'j':
+                    speichere_ergebnisse_in_sheet(sheet, top_matches, speise)
+        else:
+            # Einzelne Speise auswählen
+            try:
+                if auswahl.isdigit():
+                    # Wenn eine Nummer eingegeben wurde
+                    speisen_liste = speisen_df[SPEISEN_SPALTE].tolist()
+                    index = int(auswahl) - 1
+                    if 0 <= index < len(speisen_liste):
+                        speise_name = speisen_liste[index]
                     else:
-                        # Wenn ein Name eingegeben wurde
-                        speise_name = auswahl
-                        if speise_name not in speisen_df[SPEISEN_SPALTE].tolist():
-                            print(f"Speise '{speise_name}' nicht gefunden. Bitte wähle aus der Liste.")
-                            continue
-                    
-                    # Matching durchführen
-                    print(f"\nWeinempfehlungen für {speise_name}:")
-                    print("-" * 50)
-                    matches = finde_passenden_wein(speisen_df, weine_df, speise_name)
-                    top_matches = zeige_ergebnisse(matches)
-                    
-                    # Frage, ob Ergebnisse gespeichert werden sollen
-                    save = input("Ergebnisse im Google Sheet speichern? (j/n): ")
-                    if save.lower() == 'j':
-                        speichere_ergebnisse_in_sheet(sheet, top_matches, speise_name)
-                        
-                except Exception as e:
-                    print(f"Fehler: {e}")
+                        print("Ungültige Nummer. Bitte wähle eine Nummer aus der Liste.")
+                        continue
+                else:
+                    # Wenn ein Name eingegeben wurde
+                    speise_name = auswahl
+                    if speise_name not in speisen_df[SPEISEN_SPALTE].tolist():
+                        print(f"Speise '{speise_name}' nicht gefunden. Bitte wähle aus der Liste.")
+                        continue
                 
-    except Exception as e:
-        print(f"Ein Fehler ist aufgetreten: {e}")
+                # Matching durchführen
+                print(f"\nWeinempfehlungen für {speise_name}:")
+                print("-" * 50)
+                matches = finde_passenden_wein(speisen_df, weine_df, speise_name)
+                top_matches = zeige_ergebnisse(matches)
+                
+                # Frage, ob Ergebnisse gespeichert werden sollen
+                save = input("Ergebnisse im Google Sheet speichern? (j/n): ")
+                if save.lower() == 'j':
+                    speichere_ergebnisse_in_sheet(sheet, top_matches, speise_name)
+                        
+            except Exception as e:
+                print(f"Fehler: {e}")
+except Exception as e:
+    print(f"Ein Fehler ist aufgetreten: {e}")
         
 if __name__ == "__main__":
     hauptprogramm()
